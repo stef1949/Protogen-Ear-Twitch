@@ -10,7 +10,7 @@ Features
 
 Requirements
 
-	•	ESP32-S3 DevKitC-1 board
+	•	ESP32-S3 WROOM-1 R8N16 board
 	•	2x Servos
 	•	PlatformIO
 	•	ESP32Servo library
