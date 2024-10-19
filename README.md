@@ -1,6 +1,4 @@
-Here’s a simple README file structure for the Protogen-Ear-Twitch project based on a typical GitHub repository:
-
-Protogen Ear Twitch
+# Protogen Ear Twitch
 
 This project implements servo-driven ear-twitching functionality using an ESP32-S3 DevKitC-1 and two servo motors. The servos simulate random ear twitches with adjustable parameters.
 
@@ -19,18 +17,14 @@ Requirements
 
 Installation
 
-	1.	Clone the repository:
-
-git clone https://github.com/stef1949/Protogen-Ear-Twitch.git
-
-
-	2.	Open the project in PlatformIO.
-	3.	Install the required libraries:
-
-platformio lib install ESP32Servo
+1.	Clone the repository:
+   `git clone https://github.com/stef1949/Protogen-Ear-Twitch.git`
 
 
-	4.	Upload the code to your ESP32-S3 board.
+3.	Open the project in PlatformIO.
+4.	Install the required libraries:
+	platformio lib install ESP32Servo
+5.	Upload the code to your ESP32-S3 board.
 
 Configuration
 
