@@ -9,6 +9,11 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
+
+extern "C" {
+  uint8_t temprature_sens_read();  // Access the ESP32 internal temperature sensor
+}
+
 // Create multiple servo objects
 Servo servo1;
 Servo servo2;
@@ -33,12 +38,19 @@ bool isTwitching = false;  // Flag to track if the servo is currently in a twitc
 // Define Bluetooth service and characteristic UUIDs
 #define SERVICE_UUID "0192be9b-60a3-738d-9601-6822d6161853"
 #define CHARACTERISTIC_UUID "0192be9b-60a3-7f4a-ad00-80368ec6b227"
+#define CPU_CHARACTERISTIC_UUID "0192be9b-60a3-730d-b326-995e1c434a10"
+#define TEMP_CHARACTERISTIC_UUID "0192be9b-60a3-7dfb-89ec-e5d39dfb3cb7"
 
 BLECharacteristic *pCharacteristic;
+BLECharacteristic *cpuCharacteristic;
+BLECharacteristic *tempCharacteristic;
+
 bool deviceConnected = false;
 
-// Function prototype for the triggerTwitch function
+// Function prototypes
 void triggerTwitch();
+float readTemperature();
+float getCPUUsage();
 
 // Callbacks for BLE server client connection status
 class MyServerCallbacks: public BLEServerCallbacks {
@@ -75,6 +87,18 @@ void setup() {
                       BLECharacteristic::PROPERTY_READ |
                       BLECharacteristic::PROPERTY_WRITE
                     );
+
+ // CPU utilization characteristic
+  cpuCharacteristic = pService->createCharacteristic(
+                        CPU_CHARACTERISTIC_UUID,
+                        BLECharacteristic::PROPERTY_READ
+                      );
+
+  // Temperature characteristic
+  tempCharacteristic = pService->createCharacteristic(
+                         TEMP_CHARACTERISTIC_UUID,
+                         BLECharacteristic::PROPERTY_READ
+                       );
 
   pCharacteristic->setValue("0");  // Initialize characteristic with "LED OFF"
   pService->start();  // Start the service
@@ -133,3 +157,14 @@ void triggerTwitch() {
     isTwitching = false;
   }
 } 
+
+// Function to read ESP32 internal temperature sensor
+float readTemperature() {
+  return (temprature_sens_read() - 32) / 1.8;  // Convert to Celsius
+}
+
+// Dummy function for CPU usage (to be implemented as per your needs)
+float getCPUUsage() {
+  // Return a dummy value for now (this should be replaced with actual CPU utilization calculation)
+  return 10.0;
+}
