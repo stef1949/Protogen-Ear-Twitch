@@ -1,14 +1,11 @@
 #include <Arduino.h>
-
 // Servo Libararies
 #include <ESP32Servo.h>
-
 // Bluetooth Libraries
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
-
 
 extern "C" {
   uint8_t temprature_sens_read();  // Access the ESP32 internal temperature sensor
@@ -64,7 +61,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
 };
 
 void setup() {
-  Serial.begin(115200);
+  Serial2.begin(115200);
 
   // Initialize the servos
   servo1.attach(servo1Pin, 500, 2400);  // Attach the servo to the specified pin with min/max pulse widths
