@@ -1,38 +1,46 @@
 #include <Arduino.h>
-// Servo Libararies
 #include <ESP32Servo.h>
-// Bluetooth Libraries
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
 extern "C" {
-  uint8_t temprature_sens_read();  // Access the ESP32 internal temperature sensor
+  uint8_t temperature_sens_read();
 }
 
-// Create multiple servo objects
 Servo servo1;
 Servo servo2;
 
-// These are all GPIO pins on the ESP32
-// Recommended pins include 2,4,12-19,21-23,25-27,32-33
-// for the ESP32-S2 the GPIO pins are 1-21,26,33-42
-// for the ESP32-S3 the GPIO pins are 1-21,35-45,47-48
-// for the ESP32-C3 the GPIO pins are 1-10,18-21
-const int servo1Pin = 18;       // The GPIO pin where the servo1 is connected
-const int servo2Pin = 21;         // The GPIO pin where the servo2 is connected
+const int servo1Pin = 18;
+const int servo2Pin = 21;
 
-// Define constants
-const int restingPosition = 135;    // The position (in degrees) where the servo rests between twitches
-const int twitchRange = 45;        // The total range of motion for twitches (±22.5 degrees from resting position)
-const int interval = 15;           // Main loop interval in milliseconds
-const int twitchInterval = 2000;    // Time between twitches in milliseconds
+// Enhanced movement parameters
+const int restingPosition = 135;
+const int maxTwitchRange = 45;      // Maximum range for full twitches
+const int microTwitchRange = 15;    // Range for subtle movements
+const int interval = 15;            // Main loop interval
+const int baseInterval = 5000;      // Base time between major twitches
+const float smoothingFactor = 0.15; // Controls movement smoothing (0.0 to 1.0)
 
-int countTwitch = 0;  // Counter for tracking twitch intervals
-bool isTwitching = false;  // Flag to track if the servo is currently in a twitch position
+// Movement state variables
+struct ServoState {
+    float currentPosition;
+    float targetPosition;
+    float velocity;
+    unsigned long lastMoveTime;
+    bool isMoving;
+};
 
-// Define Bluetooth service and characteristic UUIDs
+ServoState servo1State = {restingPosition, restingPosition, 0, 0, false};
+ServoState servo2State = {180 - restingPosition, 180 - restingPosition, 0, 0, false};
+
+// Timing variables
+unsigned long lastTwitchTime = 0;
+unsigned long lastMicroTwitchTime = 0;
+int twitchInterval;  // Will be randomized
+
+// BLE definitions (unchanged)
 #define SERVICE_UUID "0192be9b-60a3-738d-9601-6822d6161853"
 #define CHARACTERISTIC_UUID "0192be9b-60a3-7f4a-ad00-80368ec6b227"
 #define CPU_CHARACTERISTIC_UUID "0192be9b-60a3-730d-b326-995e1c434a10"
@@ -41,127 +49,141 @@ bool isTwitching = false;  // Flag to track if the servo is currently in a twitc
 BLECharacteristic *pCharacteristic;
 BLECharacteristic *cpuCharacteristic;
 BLECharacteristic *tempCharacteristic;
-
 bool deviceConnected = false;
 
-// Function prototypes
-void triggerTwitch();
-float readTemperature();
-float getCPUUsage();
-
-// Callbacks for BLE server client connection status
 class MyServerCallbacks: public BLEServerCallbacks {
-  void onConnect(BLEServer* pServer) {
-    deviceConnected = true;
-  }
-
-  void onDisconnect(BLEServer* pServer) {
-    deviceConnected = false;
-  }
+    void onConnect(BLEServer* pServer) { deviceConnected = true; }
+    void onDisconnect(BLEServer* pServer) { deviceConnected = false; }
 };
 
+// New function for smooth movement
+void updateServoPosition(ServoState &state, Servo &servo, bool invert = false) {
+    if (state.currentPosition != state.targetPosition) {
+        float diff = state.targetPosition - state.currentPosition;
+        
+        // Apply smoothing
+        float movement = diff * smoothingFactor;
+        
+        // Add some natural variance to the movement speed
+        float speedVariance = random(80, 120) / 100.0;
+        movement *= speedVariance;
+        
+        state.currentPosition += movement;
+        
+        // Update servo position
+        int finalPosition = round(state.currentPosition);
+        if (invert) {
+            finalPosition = 180 - finalPosition;
+        }
+        servo.write(finalPosition);
+        
+        // Update movement state
+        state.isMoving = abs(diff) > 0.5;
+    }
+}
+
+// Enhanced twitch function with different types of movements
+void triggerTwitch(bool isMicroTwitch = false) {
+    float range = isMicroTwitch ? microTwitchRange : maxTwitchRange;
+    
+    // Calculate random positions with natural bias towards smaller movements
+    float randomFactor = pow(random(0, 1000) / 1000.0, 1.5); // Bias towards smaller movements
+    float offset = range * randomFactor * (random(2) == 0 ? -1 : 1);
+    
+    // Add slight asymmetry between ears
+    float asymmetry = random(-5, 6);
+    
+    // Set new target positions
+    servo1State.targetPosition = constrain(restingPosition + offset, 0, 180);
+    servo2State.targetPosition = constrain(180 - (restingPosition + offset + asymmetry), 0, 180);
+    
+    // Randomize next twitch interval
+    twitchInterval = baseInterval + random(-1000, 1001);
+}
+
 void setup() {
-  Serial2.begin(115200);
-
-  // Initialize the servos
-  servo1.attach(servo1Pin, 500, 2400);  // Attach the servo to the specified pin with min/max pulse widths
-  servo2.attach(servo2Pin, 500, 2400);  // Attach the servo to the specified pin with min/max pulse widths
-  // Move the servos to their initial resting position
-  servo1.write(restingPosition);
-  servo2.write(180 - restingPosition);
-
-  // Initialize BLE
-  BLEDevice::init("Richies3D-LumiFur-Device");
-  BLEServer *pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
-
-  // Create BLE Service
-  BLEService *pService = pServer->createService(SERVICE_UUID);
-
-  // Create BLE Characteristic
-  pCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID,
-                      BLECharacteristic::PROPERTY_READ |
-                      BLECharacteristic::PROPERTY_WRITE
-                    );
-
- // CPU utilization characteristic
-  cpuCharacteristic = pService->createCharacteristic(
-                        CPU_CHARACTERISTIC_UUID,
-                        BLECharacteristic::PROPERTY_READ
-                      );
-
-  // Temperature characteristic
-  tempCharacteristic = pService->createCharacteristic(
-                         TEMP_CHARACTERISTIC_UUID,
-                         BLECharacteristic::PROPERTY_READ
-                       );
-
-  pCharacteristic->setValue("0");  // Initialize characteristic with "LED OFF"
-  pService->start();  // Start the service
-
-  // Start advertising
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->start();
+    Serial2.begin(115200);
+    
+    // Initialize servos with slightly different min/max pulses for natural asymmetry
+    servo1.attach(servo1Pin, 500, 2400);
+    servo2.attach(servo2Pin, 544, 2400); // Slightly different calibration
+    
+    servo1.write(restingPosition);
+    servo2.write(180 - restingPosition);
+    
+    // Initialize BLE
+    BLEDevice::init("Richies3D-LumiFur-Device");
+    BLEServer *pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new MyServerCallbacks());
+    
+    BLEService *pService = pServer->createService(SERVICE_UUID);
+    
+    pCharacteristic = pService->createCharacteristic(
+        CHARACTERISTIC_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE
+    );
+    
+    cpuCharacteristic = pService->createCharacteristic(
+        CPU_CHARACTERISTIC_UUID,
+        BLECharacteristic::PROPERTY_READ
+    );
+    
+    tempCharacteristic = pService->createCharacteristic(
+        TEMP_CHARACTERISTIC_UUID,
+        BLECharacteristic::PROPERTY_READ
+    );
+    
+    pCharacteristic->setValue("0");
+    pService->start();
+    
+    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->start();
+    
+    // Initialize random seed
+    randomSeed(analogRead(0));
+    twitchInterval = baseInterval;
 }
 
 void loop() {
-  // BLE control: Check if the characteristic has been written to and adjust the servos accordingly
-  if (deviceConnected) {
-    std::string value = pCharacteristic->getValue();
-    if (value == "1") {
-      // Example: Activate twitching when receiving "1"
-      triggerTwitch();
-    } else if (value == "0") {
-      // Return servos to resting position on receiving "0"
-      servo1.write(restingPosition);
-      servo2.write(180 - restingPosition);
-      isTwitching = false;  // Ensure it's not twitching
+    unsigned long currentTime = millis();
+    
+    // Handle BLE control
+    if (deviceConnected) {
+        std::string value = pCharacteristic->getValue();
+        if (value == "1") {
+            triggerTwitch(false);
+        } else if (value == "0") {
+            servo1State.targetPosition = restingPosition;
+            servo2State.targetPosition = 180 - restingPosition;
+        }
     }
-  }
-
-  // Increment the counter
-  countTwitch++;
-
-  // Check if it's time for a twitch (only twitch if not controlled by BLE)
-  if (!deviceConnected && countTwitch >= (twitchInterval / interval)) {
-    countTwitch = 0;  // Reset the counter
-    triggerTwitch();  // Trigger twitch as usual
-  }
-
-  // Small delay to control the loop interval
-  delay(interval);
+    
+    // Autonomous movement when not BLE controlled
+    if (!deviceConnected) {
+        // Major twitches
+        if (currentTime - lastTwitchTime >= twitchInterval) {
+            triggerTwitch(false);
+            lastTwitchTime = currentTime;
+        }
+        
+        // Micro twitches (subtle movements)
+        if (currentTime - lastMicroTwitchTime >= 1000 && random(10) == 0) {
+            triggerTwitch(true);
+            lastMicroTwitchTime = currentTime;
+        }
+    }
+    
+    // Update servo positions with smooth movement
+    updateServoPosition(servo1State, servo1, false);
+    updateServoPosition(servo2State, servo2, true);
+    
+    delay(interval);
 }
 
-// Function to trigger servo twitch
-void triggerTwitch() {
-  if (!isTwitching) {
-    // Calculate a random position for the twitch
-    int randomOffset = random(-twitchRange/2, twitchRange/2 + 1);  // Generate a random offset
-    int twitchPosition = restingPosition + randomOffset;  // Calculate the new position
-
-    // Ensure the twitch position is within the valid servo range (0-180 degrees)
-    twitchPosition = constrain(twitchPosition, 0, 180);
-
-    // Move the servos to the twitch position
-    servo1.write(twitchPosition);
-    servo2.write(180 - twitchPosition);
-    isTwitching = true;
-  } else {
-    // Return the servos to the resting position
-    servo1.write(restingPosition);
-    servo2.write(180 - restingPosition);
-    isTwitching = false;
-  }
-} 
-
-// Function to read ESP32 internal temperature sensor
 float readTemperature() {
-  return (temprature_sens_read() - 32) / 1.8;  // Convert to Celsius
+    return (temperature_sens_read() - 32) / 1.8;
 }
 
-// Dummy function for CPU usage (to be implemented as per your needs)
 float getCPUUsage() {
-  // Return a dummy value for now (this should be replaced with actual CPU utilization calculation)
-  return 10.0;
+    return 10.0;
 }
